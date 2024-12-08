@@ -1,3 +1,5 @@
+# Fast Speculative Decoding using MDPs for Efficient Token Drafting
+
 ## Arguments
 ### General Arguments:
 - **`--device`** *(default: "cuda")*:  
