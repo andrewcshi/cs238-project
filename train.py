@@ -43,25 +43,50 @@ def main():
     parser.set_defaults(finetune=True)
 
     parser.add_argument(
-        "--hf_dataset",
+        "--hf_dataset_train",
         type=str,
         default=None,
-        help="Name of the HuggingFace dataset to use for testing (e.g., 'wikitext')."
+        help="Name of the HuggingFace dataset to use for training (e.g., 'wikitext')."
     )
     parser.add_argument(
-        "--hf_config",
+        "--hf_config_train",
         type=str,
         default=None,
         help="Configuration name of the HuggingFace dataset (if applicable)."
     )
     parser.add_argument(
-        "--hf_split",
+        "--hf_split_train",
+        type=str,
+        default="train",
+        help="Split of the HuggingFace dataset to use for training (e.g., 'train')."
+    )
+    parser.add_argument(
+        "--hf_field_train",
+        type=str,
+        default="text",
+        help="Field name in the HuggingFace dataset that contains the text data."
+    )
+
+    parser.add_argument(
+        "--hf_dataset_test",
+        type=str,
+        default=None,
+        help="Name of the HuggingFace dataset to use for testing (e.g., 'wikitext')."
+    )
+    parser.add_argument(
+        "--hf_config_test",
+        type=str,
+        default=None,
+        help="Configuration name of the HuggingFace dataset (if applicable)."
+    )
+    parser.add_argument(
+        "--hf_split_test",
         type=str,
         default="test",
         help="Split of the HuggingFace dataset to use for testing (e.g., 'train', 'validation', 'test')."
     )
     parser.add_argument(
-        "--hf_field",
+        "--hf_field_test",
         type=str,
         default="text",
         help="Field name in the HuggingFace dataset that contains the text data."
@@ -133,16 +158,26 @@ def main():
     finetune_data = default_dataset[:int(len(default_dataset) * 0.2)]
     test_data = default_dataset[int(len(default_dataset) * 0.2):]
 
-    if args.hf_dataset:
+    if args.hf_dataset_train:
         try:
-            print(f"Loading HuggingFace dataset: {args.hf_dataset}")
-            dataset = load_dataset(args.hf_dataset, args.hf_config, split=args.hf_split)
+            print(f"[train] Loading HuggingFace dataset: {args.hf_dataset_train}")
+            dataset = load_dataset(args.hf_dataset_train, args.hf_config_train, split=args.hf_split_train)
             # Extract the text field
-            test_data = dataset[args.hf_field]
-            print(f"Loaded {len(test_data)} examples from '{args.hf_dataset}' dataset.")
+            finetune_data = dataset[args.hf_field_train]
+            print(f"[train] Loaded {len(finetune_data)} examples from '{args.hf_dataset_train}' dataset.")
         except Exception as e:
-            print(f"Error loading HuggingFace dataset: {e}")
-            print("Falling back to the default hardcoded test dataset.")
+            print(f"[train] Error loading HuggingFace dataset: {e}")
+            print("[train] Falling back to the default hardcoded train dataset.")
+
+    if args.hf_dataset_test:
+        try:
+            print(f"[test] Loading HuggingFace dataset: {args.hf_dataset_test}")
+            dataset = load_dataset(args.hf_dataset_test, args.hf_config_test, split=args.hf_split_test)
+            test_data = dataset[args.hf_field_test]
+            print(f"[test] Loaded {len(test_data)} examples from '{args.hf_dataset_test}' dataset.")
+        except Exception as e:
+            print(f"[test] Error loading HuggingFace dataset: {e}")
+            print("[test] Falling back to the default hardcoded test dataset.")
 
     optimizer = optim.AdamW(drafter.parameters(), lr=1e-5)
     processor = GreedyProcessor()
