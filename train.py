@@ -306,8 +306,10 @@ def main():
     print("Evaluating on test data...")
     drafter.eval()
     total_acceptance = 0.0
+    total_van_acceptance = 0.0
     total_spec_throughput = 0.0
     total_base_throughput = 0.0
+    total_van_spec_throughput = 0.0
     test_count = 0
 
     for prefix in tqdm(test_data, desc="Testing"):
@@ -435,7 +437,9 @@ def main():
             throughput_increase = 0.0
 
         total_acceptance += spec_accept_rate
+        total_van_acceptance += van_spec_accept_rate
         total_spec_throughput += spec_throughput
+        total_van_spec_throughput += van_spec_throughput
         total_base_throughput += base_throughput
         test_count += 1
 
@@ -457,20 +461,30 @@ def main():
         torch.cuda.empty_cache()
         gc.collect()
 
-    avg_acceptance = total_acceptance / test_count if test_count > 0 else 0.0
+    avg_spec_acceptance = total_acceptance / test_count if test_count > 0 else 0.0
+    avg_van_spec_acceptance = total_van_acceptance / test_count if test_count > 0 else 0.0
     avg_spec_throughput = total_spec_throughput / test_count if test_count > 0 else 0.0
+    avg_van_spec_throughput = total_van_spec_throughput / test_count if test_count > 0 else 0.0
     avg_base_throughput = total_base_throughput / test_count if test_count > 0 else 0.0
 
     if avg_base_throughput > 0:
         avg_throughput_increase = ((avg_spec_throughput / avg_base_throughput) - 1) * 100
+        avg_van_throughput_increase = ((avg_van_spec_throughput / avg_base_throughput) - 1) * 100
     else:
         avg_throughput_increase = 0.0
+        avg_van_throughput_increase = 0.0
 
     print("Test Results:")
-    print(f"Avg Acceptance Rate: {avg_acceptance:.3f}")
+    print(f"Avg Spec Acceptance Rate: {avg_spec_acceptance:.3f}")
+    print(f"Avg Vanilla Spec Acceptance Rate: {avg_van_spec_acceptance:.3f}")
+
     print(f"Avg Speculative Throughput: {avg_spec_throughput:.1f} tokens/s")
+    print(f"Avg Vanilla Speculative Throughput: {avg_van_spec_throughput:.1f} tokens/s")
     print(f"Avg Baseline Throughput: {avg_base_throughput:.1f} tokens/s")
-    print(f"Avg Throughput Increase: {avg_throughput_increase:.1f}%")
+
+    print(f"Avg Spec Throughput Increase: {avg_throughput_increase:.1f}%")
+    print(f"Avg Vanilla Spec Throughput Increase: {avg_van_throughput_increase:.1f}%")
+
 
 if __name__ == "__main__":
     main()
