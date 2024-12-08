@@ -366,3 +366,207 @@ def speculative_generate(
     acceptance_rate = drafts_accepted / drafts_speculated if drafts_speculated > 0 else 1.0
 
     return generated_tokens, acceptance_rate, training_info
+
+
+def vanilla_speculative_generate(
+    inputs: List[int],
+    drafter: Module,
+    target: Module,
+    tokenizer=None,
+    gamma: int = 5,
+    logits_processor: LogitsProcessor = GreedyProcessor(),
+    max_gen_len: int = 40,
+    eos_tokens_id: int | List[int] = None,
+    pad_token_id: int = None,
+    use_cache: bool = True,
+    skip_sample_adjustment: bool = False,
+    first_target: bool = True,
+    debug: bool = False,
+    return_training_data: bool = False,
+    vocab_size: int = None,  # **New Parameter for Validation**
+) -> Tuple[List[int], float, dict]:
+
+    training_info = {
+        "chosen_tokens": [],
+        "chosen_logits": [],
+        "step_rewards": []
+    }
+
+    if eos_tokens_id is None and tokenizer is not None:
+        eos_tokens_id = [tokenizer.eos_token_id]
+    elif isinstance(eos_tokens_id, int):
+        eos_tokens_id = [eos_tokens_id]
+
+    if pad_token_id is None and tokenizer is not None:
+        pad_token_id = tokenizer.pad_token_id
+
+    assert len(inputs) > 0, "Input sequence is empty."
+    assert max_gen_len > 0, "max_gen_len must be positive."
+
+    drafter_cache, target_cache = None, None
+
+    if eos_tokens_id is None:
+        eos_tokens_id = [tokenizer.eos_token_id]
+
+    stop_tokens = torch.tensor(eos_tokens_id, dtype=torch.long, device=target.device).unsqueeze(1)
+    drafts_accepted, drafts_speculated = 0, 0
+
+    prompt_len = len(inputs)
+    max_seq_length = getattr(target.config, 'max_position_embeddings', 1024)
+    total_len = min(max_seq_length, prompt_len + max_gen_len)
+    assert total_len > prompt_len, \
+        f"Total length ({total_len}) must be greater than prompt length ({prompt_len})."
+
+    input_ids = torch.full(
+        (1, total_len),
+        pad_token_id,
+        dtype=torch.long,
+        device=target.device,
+        requires_grad=False
+    )
+    input_ids[0, :prompt_len] = torch.tensor(inputs, dtype=torch.long, device=target.device)
+
+    current_position = prompt_len
+
+    # **Removed MDP-specific code**
+    torch.autograd.set_detect_anomaly(True)
+
+    with torch.no_grad():
+        sample_input_ids = input_ids[..., :current_position]
+        tdraft = measure_model_time(drafter, sample_input_ids, use_cache)
+        ttarget = measure_model_time(target, sample_input_ids, use_cache)
+    
+    xprefix = input_ids[..., :current_position]
+    Y_candidates = []
+    Y_candidate_probs = []
+    steps = 0
+    accepted_tokens_total = 0
+    cumulative_reward = 0.0
+
+    if first_target:
+        with torch.no_grad():
+            Mp = target(input_ids=input_ids[..., :current_position], past_key_values=target_cache, use_cache=use_cache)
+            target_cache = Mp.past_key_values
+            p_p = logits_processor(Mp.logits[..., -1, :])
+            t = safe_sample(logits_processor, p_p, tokenizer, vocab_size, debug)
+
+            validate_token_ids([t.item()], vocab_size, context="Initial Target Sampled Token")
+
+        if current_position < total_len:
+            with torch.no_grad():
+                input_ids[0, current_position] = t
+            current_position += 1
+        else:
+            return input_ids[0, prompt_len:current_position].tolist(), 1.0, training_info
+
+        xprefix = input_ids[..., :current_position]
+        if torch.isin(t, stop_tokens):
+            return input_ids[0, prompt_len:current_position].tolist(), 1.0, training_info
+        if debug:
+            printing.initial_step(t, tokenizer)
+
+    max_iterations = max_gen_len * 2
+    iteration = 0
+    start_generation_time = time.time()
+
+    while current_position < total_len and iteration < max_iterations:
+        iteration += 1
+        steps += 1
+
+        # **Simplified action selection: Always 'continue' if candidates < gamma**
+        if len(Y_candidates) < gamma:
+            try:
+                sampled_token, drafter_cache, draft_probs = sample_from_draft_model(
+                    xprefix, drafter, logits_processor, use_cache, drafter_cache, vocab_size, tokenizer, debug
+                )
+                sampled_token = sampled_token.to(input_ids.device)
+                validate_token_ids([sampled_token.item()], vocab_size, context="Draft Sampled Token")
+            except Exception as e:
+                if debug:
+                    print(f"[Draft Model Error] {e}")
+                break
+
+            if return_training_data:
+                training_info["chosen_tokens"].append(int(sampled_token.item()))
+                training_info["chosen_logits"].append(draft_probs.squeeze(0))
+
+            Y_candidates.append(int(sampled_token.item()))
+            Y_candidate_probs.append(draft_probs.squeeze(0))
+
+            if current_position < total_len:
+                with torch.no_grad():
+                    input_ids[0, current_position] = sampled_token
+                current_position += 1
+                xprefix = input_ids[..., :current_position]
+                drafts_speculated += 1
+            else:
+                if debug:
+                    print(f"Warning: Reached total_len={total_len}. Cannot assign more tokens.")
+                break
+        else:
+            if len(Y_candidates) == 0:
+                continue
+            try:
+                accepted_tokens, rejected, target_cache = verify_with_target_model(
+                    xprefix, Y_candidates, target, logits_processor, use_cache, target_cache, Y_candidate_probs, vocab_size, tokenizer, debug
+                )
+                validate_token_ids(accepted_tokens, vocab_size, context="Accepted Tokens")
+            except Exception as e:
+                if debug:
+                    print(f"[Verification Error] {e}")
+                break
+
+            drafts_accepted += len(accepted_tokens)
+            accepted_tokens_total += len(accepted_tokens)
+            rejected_count = 1 if rejected else 0
+
+            if accepted_tokens:
+                for token in accepted_tokens:
+                    if current_position < total_len:
+                        with torch.no_grad():
+                            input_ids[0, current_position] = token
+                        current_position += 1
+                        xprefix = input_ids[..., :current_position]
+                    else:
+                        if debug:
+                            print(f"Warning: Reached total_len={total_len}.")
+                        break
+            else:
+                try:
+                    sampled_token = sample_from_target_model(xprefix, target, logits_processor, use_cache, target_cache, vocab_size, tokenizer, debug)
+                    validate_token_ids([sampled_token], vocab_size, context="Target Sampled Token")
+                except Exception as e:
+                    if debug:
+                        print(f"[Target Model Sampling Error] {e}")
+                    break
+
+                if current_position < total_len:
+                    with torch.no_grad():
+                        input_ids[0, current_position] = sampled_token
+                    current_position += 1
+                    xprefix = input_ids[..., :current_position]
+                    accepted_tokens = [sampled_token]
+                else:
+                    if debug:
+                        print(f"Warning: Reached total_len={total_len}.")
+                    break
+
+            elapsed_time = time.time() - start_generation_time
+            total_generated = current_position - prompt_len
+            throughput = total_generated / max(1e-6, elapsed_time)
+            step_reward = reward_function(len(accepted_tokens), rejected_count, throughput)
+            cumulative_reward += step_reward
+
+            if return_training_data:
+                training_info["step_rewards"].append(step_reward)
+
+            if check_end_of_sequence(accepted_tokens, eos_tokens_id):
+                break
+
+            Y_candidates = []
+            Y_candidate_probs = []
+
+    generated_tokens = input_ids[0, prompt_len:current_position].tolist()
+    acceptance_rate = drafts_accepted / drafts_speculated if drafts_speculated > 0 else 1.0
+
+    return generated_tokens, acceptance_rate, training_info
