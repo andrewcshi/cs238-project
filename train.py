@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from utils.logits_processor import GreedyProcessor
-from sampling.speculative_decoding import speculative_generate
+from sampling.speculative_decoding import speculative_generate, vanilla_speculative_generate
 from sampling.base_decoding import autoregressive_generate
 from datasets import load_dataset
 
@@ -364,6 +364,41 @@ def main():
         spec_output_text = tokenizer.decode(spec_output_ids, skip_special_tokens=True)
         spec_throughput = len(spec_output_text) / max(1e-6, (spec_end_time - spec_start_time))
 
+        # vanilla speculative deocidng
+        try:
+            van_spec_start_time = time.time()
+            van_spec_output_ids, van_spec_accept_rate, _ = vanilla_speculative_generate(
+                tokenized,
+                drafter,
+                target,
+                tokenizer=tokenizer,
+                logits_processor=processor,
+                gamma=5,
+                max_gen_len=20,
+                eos_tokens_id=eos_tokens_id,
+                debug=debug,
+                use_cache=False,  # Use_cache disabled during eval to avoid issues
+                return_training_data=False,
+                vocab_size=vocab_size
+            )
+            van_spec_end_time = time.time()
+        except Exception as e:
+            print(f"[Vanilla Speculative Generate Error] {e}")
+            gc.collect()
+            torch.cuda.empty_cache()
+            continue
+
+        try:
+            validate_token_ids(van_spec_output_ids, vocab_size, context="Vanilla Speculative Generate Evaluation Output")
+        except ValueError as ve:
+            print(f"[Vanilla Speculative Output Validation Error] {ve}")
+            gc.collect()
+            torch.cuda.empty_cache()
+            continue
+
+        van_spec_output_text = tokenizer.decode(van_spec_output_ids, skip_special_tokens=True)
+        van_spec_throughput = len(spec_output_text) / max(1e-6, (van_spec_end_time - van_spec_start_time))
+
         # Autoregressive Decoding (Baseline)
         try:
             base_start_time = time.time()
@@ -406,13 +441,19 @@ def main():
 
         print(f"Prompt: {prefix}")
         print(f"Speculative Output: \n\n{spec_output_text}\n")
+        print(f"Vanilla Speculative Output: \n\n{van_spec_output_text}\n")
         print(f"Autoregressive Output: \n\n{base_output_text}\n")
+       
         print(f"Acceptance Rate: {spec_accept_rate:.3f}")
+        print(f"Vanilla Acceptance Rate: {van_spec_accept_rate:.3f}")
+        
         print(f"Speculative Throughput: {spec_throughput:.1f} tokens/s")
+        print(f"Vanilla Speculative Throughput: {van_spec_throughput:.1f} tokens/s")
         print(f"Baseline Throughput: {base_throughput:.1f} tokens/s")
+
         print(f"Throughput Increase: {throughput_increase:.1f}%\n")
 
-        del spec_output_ids, spec_output_text, base_output_ids, base_output_text
+        del spec_output_ids, spec_output_text, base_output_ids, base_output_text, van_spec_output_ids, van_spec_output_text
         torch.cuda.empty_cache()
         gc.collect()
 
