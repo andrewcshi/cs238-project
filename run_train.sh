@@ -1,0 +1,14 @@
+python train.py \
+    --device cuda \
+    --mixed_precision \
+    --finetune \
+    --hf_dataset_train wikitext \
+    --hf_config_train wikitext-2-v1 \
+    --hf_split_train train \
+    --hf_field_train text \
+    --hf_dataset_test wikitext \
+    --hf_config_test wikitext-2-v1 \
+    --hf_split_test test \
+    --hf_field_test text \
+    --batch_size 16 \
+    --max_seq_len 512
