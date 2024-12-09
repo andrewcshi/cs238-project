@@ -50,4 +50,4 @@ python train.py --device "cuda" --mixed_precision --hf_dataset_train "wikitext" 
 
 
 **Repositories Referenced**:
-   - **[Speculative-Decoding](https://github.com/romsto/Speculative-Decoding/tree/main)**:
+   - **[Speculative-Decoding](https://github.com/romsto/Speculative-Decoding/tree/main)**: Implementation of speculative decoding following Leviathan et al., 2023
