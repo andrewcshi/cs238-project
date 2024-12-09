@@ -47,3 +47,7 @@
 ```bash
 python train.py --device "cuda" --mixed_precision --hf_dataset_train "wikitext" --hf_split_train "train"
 ```
+
+
+**Repositories Referenced**:
+   - **[Speculative-Decoding](https://github.com/romsto/Speculative-Decoding/tree/main)**:
